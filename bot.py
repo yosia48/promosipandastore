@@ -58,55 +58,88 @@ async def delete_last_promo(group_id):
             pass  # Bisa gagal kalau pesan sudah dihapus
 
 # Kirim promo baru ke grup dan simpan pesan ID
-async def send_promo(group_id):
+async def send_promo(group_id, topic_id=None):
     await delete_last_promo(group_id)
     promos = load_promos()
     if not promos:
         return
     promo_msg = random.choice(promos)
     try:
-        sent = await client.send_message(int(group_id), promo_msg)
+        if topic_id:
+            sent = await client.send_message(
+                entity=int(group_id),
+                message=promo_msg,
+                message_thread_id=topic_id
+            )
+        else:
+            sent = await client.send_message(
+                entity=int(group_id),
+                message=promo_msg
+            )
         MSG_RECORDS[group_id] = sent.id
     except Exception as e:
-        print(f"Gagal kirim pesan ke {group_id}: {str(e)}")
+        print(f"Gagal kirim pesan ke {group_id} (topic {topic_id}): {str(e)}")
 
 # Fungsi yang dipanggil scheduler secara asynchronous
-def schedule_send_promo(group_id):
-    asyncio.create_task(send_promo(group_id))
+def schedule_send_promo(group_id, topic_id=None):
+    asyncio.create_task(send_promo(group_id, topic_id))
 
 # Setup scheduler sesuai grup dan tipe
 def setup_scheduler():
     scheduler = AsyncIOScheduler()
     config = load_config()
     for group_id, ginfo in config["groups"].items():
+        t_id = ginfo.get("topic_id")
         if ginfo.get("type") == "free":
             # Kirim setiap 2 jam untuk grup bebas
-            scheduler.add_job(schedule_send_promo, "interval", args=[group_id], hours=2)
+            scheduler.add_job(schedule_send_promo, "interval", args=[group_id, t_id], hours=2)
         elif ginfo.get("type") == "limit":
             # Kirim tiap hari jam 07:00 & 17:30 untuk grup terbatas
-            scheduler.add_job(schedule_send_promo, "cron", args=[group_id], hour=7, minute=0)
-            scheduler.add_job(schedule_send_promo, "cron", args=[group_id], hour=17, minute=30)
+            scheduler.add_job(schedule_send_promo, "cron", args=[group_id, t_id], hour=7, minute=0)
+            scheduler.add_job(schedule_send_promo, "cron", args=[group_id, t_id], hour=17, minute=30)
     scheduler.start()
 
-# Command: set grup jadi bebas (free)
-@client.on(events.NewMessage(pattern="^!setfree (.+)$"))
+# Command: set grup jadi bebas (free), optional topic_id
+@client.on(events.NewMessage(pattern="^!setfree (\\-?\\d+)(?: (\\d+))?$"))
 async def setfree(event):
-    gid = event.pattern_match.group(1)
+    args = event.text.split()
+    gid = args[1]
+    topic_id = int(args[2]) if len(args) > 2 else None
     config = load_config()
     config["groups"][gid] = {"type": "free"}
+    if topic_id:
+        config["groups"][gid]["topic_id"] = topic_id
+    else:
+        config["groups"][gid].pop("topic_id", None)  # hapus jika ada sebelumnya
     save_config(config)
-    await event.reply(f"Grup {gid} diatur sebagai grup BEBAS (promo tiap 2 jam).")
+    msg = f"Grup {gid} diatur sebagai grup BEBAS (promo tiap 2 jam)"
+    if topic_id:
+        msg += f" di topic ID {topic_id}."
+    else:
+        msg += "."
+    await event.reply(msg)
 
-# Command: set grup jadi terbatas (limit)
-@client.on(events.NewMessage(pattern="^!setlimit (.+) 2$"))
+# Command: set grup jadi terbatas (limit), optional topic_id
+@client.on(events.NewMessage(pattern="^!setlimit (\\-?\\d+) 2(?: (\\d+))?$"))
 async def setlimit(event):
-    gid = event.pattern_match.group(1)
+    args = event.text.split()
+    gid = args[1]
+    topic_id = int(args[3]) if len(args) > 3 else None
     config = load_config()
     config["groups"][gid] = {"type": "limit"}
+    if topic_id:
+        config["groups"][gid]["topic_id"] = topic_id
+    else:
+        config["groups"][gid].pop("topic_id", None)
     save_config(config)
-    await event.reply(f"Grup {gid} diatur sebagai grup TERBATAS (promo jam 07:00 & 17:30).")
+    msg = f"Grup {gid} diatur sebagai grup TERBATAS (promo jam 07:00 & 17:30)"
+    if topic_id:
+        msg += f" di topic ID {topic_id}."
+    else:
+        msg += "."
+    await event.reply(msg)
 
-# Command: list semua grup dan statusnya
+# Command: list semua grup dan statusnya, termasuk topic_id jika ada
 @client.on(events.NewMessage(pattern="^!listgroups$"))
 async def listgroups(event):
     config = load_config()
@@ -116,7 +149,10 @@ async def listgroups(event):
     msg = "Daftar Grup:\n"
     for gid, info in config["groups"].items():
         tipe = "FREE (2 jam sekali)" if info.get("type")=="free" else "LIMIT (07:00 & 17:30)"
-        msg += f"{gid}: {tipe}\n"
+        if "topic_id" in info:
+            msg += f"{gid} (topic {info['topic_id']}): {tipe}\n"
+        else:
+            msg += f"{gid}: {tipe}\n"
     await event.reply(msg)
 
 # Command: tambah pesan promosi baru
@@ -153,12 +189,19 @@ async def listpromo(event):
         msg += f"{i}. {preview}...\n"
     await event.reply(msg)
 
-# Command: kirim promo manual ke grup tertentu
-@client.on(events.NewMessage(pattern="^!promo (.+)$"))
+# Command: kirim promo manual ke grup (dan optional topic_id)
+@client.on(events.NewMessage(pattern="^!promo (\\-?\\d+)(?: (\\d+))?$"))
 async def promo(event):
-    gid = event.pattern_match.group(1)
-    await send_promo(gid)
-    await event.reply(f"Promosi dikirim manual ke grup {gid}.")
+    args = event.text.split()
+    gid = args[1]
+    topic_id = int(args[2]) if len(args) > 2 else None
+    await send_promo(gid, topic_id)
+    msg = f"Promosi dikirim manual ke grup {gid}"
+    if topic_id:
+        msg += f" di topic ID {topic_id}."
+    else:
+        msg += "."
+    await event.reply(msg)
 
 # Fungsi menjalankan keepalive webserver dan userbot paralel
 def run_keepalive():
