@@ -7,8 +7,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 import uvicorn
 
-API_ID = "ISI_API_ID"       # Ganti dengan API ID Anda dari my.telegram.org
-API_HASH = "ISI_API_HASH"   # Ganti dengan API HASH Anda
+API_ID = "27460087"       # Ganti dengan API ID Anda dari my.telegram.org
+API_HASH = "5b4e25d46c9fadc077991080761fc194"   # Ganti dengan API HASH Anda
 SESSION_NAME = "userbot_session"  # Nama file session userbot
 
 CONFIG_FILE = "config.json"
